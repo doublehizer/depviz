@@ -1,0 +1,4 @@
+# Не хватает параметров, есть лишний.
+package: Newtonsoft.Json
+repository: https://api.nuget.org/v3/index.json
+color: red

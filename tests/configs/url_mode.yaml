@@ -1,0 +1,8 @@
+# Обычный режим: реальный репозиторий NuGet по URL.
+package: Newtonsoft.Json
+repository: https://api.nuget.org/v3/index.json
+test_mode: false
+output_image: newtonsoft.png
+ascii_tree: false
+max_depth: 2
+filter: Test

@@ -1,0 +1,8 @@
+# Все семь параметров заданы неверно — видны все ошибки сразу.
+package: "Мой пакет!"
+repository: ""
+test_mode: "да"
+output_image: graph.jpg
+ascii_tree: 1
+max_depth: 0
+filter: 123

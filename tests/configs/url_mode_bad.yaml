@@ -1,0 +1,8 @@
+# Обычный режим, но вместо URL указан путь к файлу.
+package: Newtonsoft.Json
+repository: ../repos/simple.txt
+test_mode: false
+output_image: graph.png
+ascii_tree: false
+max_depth: 3
+filter: ""

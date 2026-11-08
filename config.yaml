@@ -1,0 +1,8 @@
+# Настройки визуализатора зависимостей (пример).
+package: Serilog.Sinks.Console
+repository: https://api.nuget.org/v3/index.json
+test_mode: false
+output_image: graph.png
+ascii_tree: true
+max_depth: 3
+filter: ""

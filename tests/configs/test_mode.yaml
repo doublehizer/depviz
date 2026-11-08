@@ -1,0 +1,8 @@
+# Тестовый режим: граф из файла, пакеты — большие латинские буквы.
+package: A
+repository: ../repos/simple.txt
+test_mode: true
+output_image: a.png
+ascii_tree: true
+max_depth: 5
+filter: ""
