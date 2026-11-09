@@ -4,10 +4,13 @@ import io
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
-from depviz.config import CHECKS, format_config, load_config, validate
-from depviz.errors import ConfigError
+from depviz.config import CHECKS, load_config, validate
+from depviz.errors import ConfigError, NuGetError
 from depviz.main import EXIT_ERROR, EXIT_OK, main
+from depviz.nuget import PackageInfo
 
 TESTS_DIR = Path(__file__).parent
 CONFIGS_DIR = TESTS_DIR / "configs"
@@ -154,32 +157,48 @@ class LoadConfigTest(unittest.TestCase):
         self.assertIn("синтаксиса YAML", str(context.exception))
 
 
-class OutputTest(unittest.TestCase):
-    """Проверки вывода параметров."""
+class MainTest(unittest.TestCase):
+    """Проверки точки входа (без обращения к сети)."""
 
-    def test_format(self):
-        """Каждый параметр выводится строкой «ключ = значение»."""
-        text = format_config(make_config())
-        self.assertIn("package = Newtonsoft.Json", text)
-        self.assertIn("test_mode = false", text)
-        self.assertIn('filter = ""', text)
-        self.assertEqual(len(text.splitlines()), len(CHECKS))
+    def run_main(self, config_name):
+        """Запустить main и вернуть код выхода, stdout и stderr."""
+        output, errors = io.StringIO(), io.StringIO()
+        with redirect_stdout(output), redirect_stderr(errors):
+            code = main(["--config", str(CONFIGS_DIR / config_name)])
+        return SimpleNamespace(
+            code=code, output=output.getvalue(), errors=errors.getvalue()
+        )
 
-    def test_main_ok(self):
-        """main выводит параметры и возвращает код успеха."""
-        output = io.StringIO()
-        with redirect_stdout(output):
-            code = main(["--config", str(CONFIGS_DIR / "url_mode.yaml")])
-        self.assertEqual(code, EXIT_OK)
-        self.assertIn("max_depth = 2", output.getvalue())
+    def test_dependencies_printed(self):
+        """Выводятся прямые зависимости, а не параметры настроек."""
+        info = PackageInfo("Newtonsoft.Json", "13.0.4", "net6.0",
+                           [("Demo", "1.0.0")])
+        with mock.patch("depviz.main.get_direct_dependencies",
+                        return_value=info):
+            result = self.run_main("url_mode.yaml")
+        self.assertEqual(result.code, EXIT_OK)
+        self.assertIn("  Demo 1.0.0", result.output)
+        self.assertNotIn("max_depth =", result.output)
 
-    def test_main_error(self):
-        """При ошибке main пишет её в stderr и возвращает код ошибки."""
-        errors = io.StringIO()
-        with redirect_stderr(errors):
-            code = main(["--config", str(CONFIGS_DIR / "all_wrong.yaml")])
-        self.assertEqual(code, EXIT_ERROR)
-        self.assertIn("max_depth:", errors.getvalue())
+    def test_nuget_error(self):
+        """Ошибка репозитория — сообщение в stderr и код ошибки."""
+        with mock.patch("depviz.main.get_direct_dependencies",
+                        side_effect=NuGetError("нет сети")):
+            result = self.run_main("url_mode.yaml")
+        self.assertEqual(result.code, EXIT_ERROR)
+        self.assertIn("нет сети", result.errors)
+
+    def test_config_error(self):
+        """Ошибки настроек — в stderr, до обращения к сети."""
+        result = self.run_main("all_wrong.yaml")
+        self.assertEqual(result.code, EXIT_ERROR)
+        self.assertIn("max_depth:", result.errors)
+
+    def test_test_mode(self):
+        """Тестовый режим пока только сообщает про этап 3."""
+        result = self.run_main("test_mode.yaml")
+        self.assertEqual(result.code, EXIT_OK)
+        self.assertIn("этапе 3", result.output)
 
 
 if __name__ == "__main__":

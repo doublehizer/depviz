@@ -1,0 +1,8 @@
+# Этап 2: пакет с тремя прямыми зависимостями (группа net8.0).
+package: Microsoft.Extensions.Logging
+repository: https://api.nuget.org/v3/index.json
+test_mode: false
+output_image: graph.png
+ascii_tree: false
+max_depth: 3
+filter: ""

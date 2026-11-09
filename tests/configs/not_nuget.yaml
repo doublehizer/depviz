@@ -1,0 +1,8 @@
+# Этап 2: адрес отвечает, но это не репозиторий NuGet.
+package: Newtonsoft.Json
+repository: https://github.com
+test_mode: false
+output_image: graph.png
+ascii_tree: false
+max_depth: 3
+filter: ""

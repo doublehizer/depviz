@@ -200,27 +200,3 @@ def check_mode(config, base_dir):
             f"repository: файл тестового репозитория не найден: {repository}"
         )
     return errors
-
-
-def format_value(value):
-    """Показать значение так, как оно записывается в YAML.
-
-    :param value: значение параметра.
-    :return: строка: true/false для логических, "" для пустой строки.
-    """
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if value == "":
-        return '""'
-    return str(value)
-
-
-def format_config(config):
-    """Сформировать вывод параметров в формате ключ-значение.
-
-    :param config: словарь параметров.
-    :return: многострочный текст ``ключ = значение``.
-    """
-    return "\n".join(
-        f"{name} = {format_value(value)}" for name, value in config.items()
-    )

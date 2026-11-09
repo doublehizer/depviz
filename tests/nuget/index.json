@@ -1,0 +1,7 @@
+{
+  "version": "3.0.0",
+  "resources": [
+    {"@id": "https://example.org/query", "@type": "SearchQueryService"},
+    {"@id": "https://example.org/flat/", "@type": "PackageBaseAddress/3.0.0"}
+  ]
+}

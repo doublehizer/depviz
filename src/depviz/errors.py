@@ -15,3 +15,7 @@ class ConfigError(Exception):
         """
         super().__init__("\n".join(messages))
         self.messages = messages
+
+
+class NuGetError(Exception):
+    """Не удалось получить данные из репозитория NuGet."""
