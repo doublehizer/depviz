@@ -1,0 +1,8 @@
+# Цепочка, max_depth 10: весь граф.
+package: A
+repository: ../../repos/chain.txt
+test_mode: true
+output_image: graph.png
+ascii_tree: false
+max_depth: 10
+filter: ""

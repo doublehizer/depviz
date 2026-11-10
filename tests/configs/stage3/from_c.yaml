@@ -1,0 +1,8 @@
+# Анализ не с корня: пакет C.
+package: C
+repository: ../../repos/simple.txt
+test_mode: true
+output_image: graph.png
+ascii_tree: false
+max_depth: 5
+filter: ""

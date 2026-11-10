@@ -1,0 +1,8 @@
+# Ромб: общий пакет D раскрывается один раз, циклов нет.
+package: A
+repository: ../../repos/diamond.txt
+test_mode: true
+output_image: graph.png
+ascii_tree: false
+max_depth: 5
+filter: ""

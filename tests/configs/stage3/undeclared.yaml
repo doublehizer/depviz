@@ -1,0 +1,8 @@
+# Ошибка в файле репозитория: пакет не описан.
+package: A
+repository: ../../repos/undeclared.txt
+test_mode: true
+output_image: graph.png
+ascii_tree: false
+max_depth: 5
+filter: ""

@@ -1,0 +1,8 @@
+# Этап 3: настоящий NuGet с фильтром "abstractions".
+package: Microsoft.Extensions.Logging
+repository: https://api.nuget.org/v3/index.json
+test_mode: false
+output_image: logging.png
+ascii_tree: false
+max_depth: 3
+filter: "abstractions"

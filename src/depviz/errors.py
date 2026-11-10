@@ -19,3 +19,7 @@ class ConfigError(Exception):
 
 class NuGetError(Exception):
     """Не удалось получить данные из репозитория NuGet."""
+
+
+class RepoFileError(Exception):
+    """Файл тестового репозитория не читается или в нём ошибка."""

@@ -1,17 +1,16 @@
-"""Получение прямых зависимостей пакета из репозитория NuGet.
+"""Получение зависимостей пакетов из репозитория NuGet.
 
 Используется только HTTP (urllib) и разбор JSON/XML, без менеджеров
-пакетов и сторонних библиотек. Шаги:
+пакетов и сторонних библиотек. Для одного пакета:
 
 1. Скачать список сервисов репозитория (``index.json``) и найти
    в нём адрес хранилища пакетов (``PackageBaseAddress/3.0.0``).
-2. Скачать список версий пакета и выбрать последнюю стабильную.
+2. Скачать список версий пакета и выбрать версию.
 3. Скачать описание пакета ``.nuspec`` (XML) и достать зависимости
    из группы для net8.0 или ближайшей совместимой с ней.
 """
 
 import json
-from dataclasses import dataclass
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 from xml.etree import ElementTree
@@ -20,8 +19,8 @@ from depviz.errors import NuGetError
 
 TIMEOUT = 15
 HTTP_NOT_FOUND = 404
+VERSION_PARTS = 4
 BASE_ADDRESS_TYPE = "PackageBaseAddress/3.0.0"
-TARGET_FRAMEWORK = "net8.0"
 ANY_FRAMEWORK = ""
 COMPATIBLE_FRAMEWORKS = (
     "net8.0", "net7.0", "net6.0", "net5.0",
@@ -36,23 +35,6 @@ COMPATIBLE_FRAMEWORKS = (
 
 class NotFoundError(NuGetError):
     """Сервер ответил 404: такого адреса в репозитории нет."""
-
-
-@dataclass
-class PackageInfo:
-    """Пакет и его прямые зависимости.
-
-    :ivar name: имя пакета.
-    :ivar version: выбранная версия пакета.
-    :ivar framework: выбранная группа зависимостей; ``""`` — группа
-        для любого фреймворка; None — совместимой группы нет.
-    :ivar dependencies: список пар ``(имя, версия)``.
-    """
-
-    name: str
-    version: str
-    framework: str
-    dependencies: list
 
 
 def fetch(url):
@@ -111,7 +93,8 @@ def find_base_address(index):
 def version_key(version):
     """Ключ для сравнения версий: ``1.2.10`` больше ``1.2.9``.
 
-    Сначала сравниваются числа, затем стабильная версия считается
+    Сначала сравниваются числа (недостающие считаются нулями:
+    ``1.0`` равно ``1.0.0``), затем стабильная версия считается
     новее предварительной (``2.0.0`` новее ``2.0.0-rc1``), затем
     сравниваются метки (``beta`` раньше ``rc``).
 
@@ -120,9 +103,10 @@ def version_key(version):
     """
     parts = version.split("+")[0].partition("-")
     release, label = parts[0], parts[2]
-    numbers = tuple(int(part) if part.isdigit() else 0
-                    for part in release.split("."))
-    return numbers, not label, label
+    numbers = [int(part) if part.isdigit() else 0
+               for part in release.split(".")]
+    numbers += [0] * (VERSION_PARTS - len(numbers))
+    return tuple(numbers), not label, label
 
 
 def choose_version(versions):
@@ -138,6 +122,71 @@ def choose_version(versions):
         raise NuGetError("у пакета нет ни одной версии")
     stable = [version for version in versions if "-" not in version]
     return max(stable or versions, key=version_key)
+
+
+def parse_range(text):
+    """Разобрать диапазон версий из .nuspec.
+
+    ``1.0`` — не ниже 1.0; ``[1.0]`` — ровно 1.0;
+    ``[1.0, 2.0)`` — от 1.0 включительно до 2.0 не включая;
+    ``(, 2.0]`` — не выше 2.0.
+
+    :param text: диапазон в записи NuGet.
+    :return: кортеж ``(нижняя, включительно, верхняя, включительно)``;
+        граница None — без ограничения.
+    """
+    text = text.strip()
+    if not text.startswith(("[", "(")):
+        return text or None, True, None, False
+    low_inclusive = text.startswith("[")
+    high_inclusive = text.endswith("]")
+    inner = text[1:-1]
+    if "," not in inner:
+        exact = inner.strip()
+        return exact, True, exact, True
+    low, high = (part.strip() or None for part in inner.split(",", 1))
+    return low, low_inclusive, high, high_inclusive
+
+
+def in_range(version, bounds):
+    """Проверить, подходит ли версия под диапазон.
+
+    Сравниваются только числа версии.
+
+    :param version: версия.
+    :param bounds: результат parse_range.
+    :return: True, если подходит.
+    """
+    low, low_inclusive, high, high_inclusive = bounds
+    key = version_key(version)[0]
+    if low is not None:
+        low_key = version_key(low)[0]
+        if key < low_key or (key == low_key and not low_inclusive):
+            return False
+    if high is not None:
+        high_key = version_key(high)[0]
+        if key > high_key or (key == high_key and not high_inclusive):
+            return False
+    return True
+
+
+def choose_in_range(versions, text):
+    """Выбрать самую низкую версию, подходящую под диапазон.
+
+    Так NuGet выбирает версию зависимости. Стабильные версии
+    предпочтительнее предварительных.
+
+    :param versions: список версий пакета.
+    :param text: диапазон из .nuspec, например ``[8.0.0, 9.0.0)``.
+    :return: выбранная версия.
+    :raises NuGetError: если подходящей версии нет.
+    """
+    bounds = parse_range(text)
+    matching = [version for version in versions if in_range(version, bounds)]
+    stable = [version for version in matching if "-" not in version]
+    if not stable and not matching:
+        raise NuGetError(f"нет версии, подходящей под диапазон {text}")
+    return min(stable or matching, key=version_key)
 
 
 def get_versions(base, package):
@@ -232,44 +281,55 @@ def choose_group(groups):
     return None, []
 
 
-def get_direct_dependencies(repository, package):
-    """Получить прямые зависимости пакета из репозитория NuGet.
+class NuGetSource:
+    """Источник зависимостей: настоящий репозиторий NuGet.
 
-    :param repository: URL списка сервисов, например
-        ``https://api.nuget.org/v3/index.json``.
-    :param package: имя пакета.
-    :return: объект PackageInfo.
-    :raises NuGetError: при любой ошибке получения данных.
+    Для корневого пакета берётся последняя стабильная версия, для
+    остальных — самая низкая версия, подходящая под диапазон из
+    .nuspec пакета, который первым на них сослался (так выбирает
+    версии NuGet). Каждый пакет скачивается только один раз.
     """
-    base = find_base_address(fetch_json(repository))
-    version = choose_version(get_versions(base, package))
-    name, number = package.lower(), version.lower()
-    nuspec = fetch(f"{base}{name}/{number}/{name}.nuspec")
-    groups = parse_groups(nuspec)
-    if not groups:
-        return PackageInfo(package, version, ANY_FRAMEWORK, [])
-    framework, dependencies = choose_group(groups)
-    return PackageInfo(package, version, framework, dependencies)
 
+    def __init__(self, repository):
+        """Создать источник.
 
-def format_dependencies(info):
-    """Сформировать текст со списком прямых зависимостей.
+        :param repository: URL списка сервисов, например
+            ``https://api.nuget.org/v3/index.json``.
+        """
+        self.repository = repository
+        self.base = None
+        self.ranges = {}
+        self.versions = {}
+        self.cache = {}
 
-    :param info: объект PackageInfo.
-    :return: многострочный текст для вывода на экран.
-    """
-    if info.framework is None:
-        group = f"нет группы, совместимой с {TARGET_FRAMEWORK}"
-    else:
-        group = info.framework or "для любого фреймворка"
-    lines = [
-        f"Пакет: {info.name} {info.version}",
-        f"Группа зависимостей: {group}",
-    ]
-    if not info.dependencies:
-        lines.append("Прямых зависимостей нет.")
-        return "\n".join(lines)
-    lines.append(f"Прямые зависимости ({len(info.dependencies)}):")
-    for name, version in info.dependencies:
-        lines.append(f"  {name} {version}".rstrip())
-    return "\n".join(lines)
+    def dependencies(self, package):
+        """Вернуть прямые зависимости пакета (с запоминанием).
+
+        :param package: имя пакета.
+        :return: список имён зависимостей.
+        :raises NuGetError: при любой ошибке получения данных.
+        """
+        if package not in self.cache:
+            self.cache[package] = self.load(package)
+        return self.cache[package]
+
+    def load(self, package):
+        """Скачать версию и .nuspec пакета и прочитать зависимости.
+
+        :param package: имя пакета.
+        :return: список имён зависимостей.
+        """
+        if self.base is None:
+            self.base = find_base_address(fetch_json(self.repository))
+        versions = get_versions(self.base, package)
+        if package in self.ranges:
+            version = choose_in_range(versions, self.ranges[package])
+        else:
+            version = choose_version(versions)
+        self.versions[package] = version
+        name, number = package.lower(), version.lower()
+        nuspec = fetch(f"{self.base}{name}/{number}/{name}.nuspec")
+        found = choose_group(parse_groups(nuspec))[1]
+        for dependency, version_range in found:
+            self.ranges.setdefault(dependency, version_range)
+        return [dependency for dependency, version_range in found]

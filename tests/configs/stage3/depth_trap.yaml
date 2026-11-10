@@ -1,0 +1,8 @@
+# Короткий путь важнее: при max_depth 2 пакет D в графе.
+package: A
+repository: ../../repos/depth_trap.txt
+test_mode: true
+output_image: graph.png
+ascii_tree: false
+max_depth: 2
+filter: ""

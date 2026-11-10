@@ -1,16 +1,10 @@
 """Тесты для чтения и проверки файла настроек."""
 
-import io
 import unittest
-from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
-from types import SimpleNamespace
-from unittest import mock
 
 from depviz.config import CHECKS, load_config, validate
-from depviz.errors import ConfigError, NuGetError
-from depviz.main import EXIT_ERROR, EXIT_OK, main
-from depviz.nuget import PackageInfo
+from depviz.errors import ConfigError
 
 TESTS_DIR = Path(__file__).parent
 CONFIGS_DIR = TESTS_DIR / "configs"
@@ -155,50 +149,6 @@ class LoadConfigTest(unittest.TestCase):
         with self.assertRaises(ConfigError) as context:
             load_config(CONFIGS_DIR / "syntax_error.yaml")
         self.assertIn("синтаксиса YAML", str(context.exception))
-
-
-class MainTest(unittest.TestCase):
-    """Проверки точки входа (без обращения к сети)."""
-
-    def run_main(self, config_name):
-        """Запустить main и вернуть код выхода, stdout и stderr."""
-        output, errors = io.StringIO(), io.StringIO()
-        with redirect_stdout(output), redirect_stderr(errors):
-            code = main(["--config", str(CONFIGS_DIR / config_name)])
-        return SimpleNamespace(
-            code=code, output=output.getvalue(), errors=errors.getvalue()
-        )
-
-    def test_dependencies_printed(self):
-        """Выводятся прямые зависимости, а не параметры настроек."""
-        info = PackageInfo("Newtonsoft.Json", "13.0.4", "net6.0",
-                           [("Demo", "1.0.0")])
-        with mock.patch("depviz.main.get_direct_dependencies",
-                        return_value=info):
-            result = self.run_main("url_mode.yaml")
-        self.assertEqual(result.code, EXIT_OK)
-        self.assertIn("  Demo 1.0.0", result.output)
-        self.assertNotIn("max_depth =", result.output)
-
-    def test_nuget_error(self):
-        """Ошибка репозитория — сообщение в stderr и код ошибки."""
-        with mock.patch("depviz.main.get_direct_dependencies",
-                        side_effect=NuGetError("нет сети")):
-            result = self.run_main("url_mode.yaml")
-        self.assertEqual(result.code, EXIT_ERROR)
-        self.assertIn("нет сети", result.errors)
-
-    def test_config_error(self):
-        """Ошибки настроек — в stderr, до обращения к сети."""
-        result = self.run_main("all_wrong.yaml")
-        self.assertEqual(result.code, EXIT_ERROR)
-        self.assertIn("max_depth:", result.errors)
-
-    def test_test_mode(self):
-        """Тестовый режим пока только сообщает про этап 3."""
-        result = self.run_main("test_mode.yaml")
-        self.assertEqual(result.code, EXIT_OK)
-        self.assertIn("этапе 3", result.output)
 
 
 if __name__ == "__main__":

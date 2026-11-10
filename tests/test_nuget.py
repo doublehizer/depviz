@@ -8,40 +8,18 @@ from urllib.error import HTTPError, URLError
 
 from depviz.errors import NuGetError
 from depviz.nuget import (
-    ANY_FRAMEWORK, PackageInfo, choose_group, choose_version, fetch,
-    find_base_address, format_dependencies, get_direct_dependencies,
-    parse_groups, version_key,
+    ANY_FRAMEWORK, NotFoundError, NuGetSource, choose_group, choose_in_range,
+    choose_version, fetch, find_base_address, in_range, parse_groups,
+    parse_range, version_key,
 )
 
 NUGET_DIR = Path(__file__).parent / "nuget"
-REPOSITORY = "https://example.org/index.json"
 BASE = "https://example.org/flat/"
 
 
 def sample(name):
     """Прочитать пример ответа сервера из tests/nuget."""
     return (NUGET_DIR / name).read_bytes()
-
-
-def fake_server(nuspec_name):
-    """Сделать подмену fetch, которая отвечает файлами из tests/nuget.
-
-    :param nuspec_name: какой .nuspec отдавать для пакета demo.
-    :return: функция с тем же видом, что и fetch.
-    """
-    answers = {
-        REPOSITORY: sample("index.json"),
-        f"{BASE}demo/index.json": sample("versions.json"),
-        f"{BASE}demo/1.2.10/demo.nuspec": sample(nuspec_name),
-    }
-
-    def fake_fetch(url):
-        """Вернуть заготовленный ответ или ошибку «не найдено»."""
-        if url not in answers:
-            raise NuGetError(f"не найдено: {url}")
-        return answers[url]
-
-    return fake_fetch
 
 
 class FetchTest(unittest.TestCase):
@@ -166,50 +144,131 @@ class GroupTest(unittest.TestCase):
             parse_groups(b"not xml at all")
 
 
-class DirectDependenciesTest(unittest.TestCase):
-    """Проверки всей цепочки на подменённом сервере."""
+class RangeTest(unittest.TestCase):
+    """Проверки диапазонов версий из .nuspec."""
 
-    def test_full_chain(self):
-        """index.json → версии → .nuspec → зависимости группы net8.0."""
-        with mock.patch("depviz.nuget.fetch", fake_server("grouped.nuspec")):
-            info = get_direct_dependencies(REPOSITORY, "Demo")
-        self.assertEqual(info.version, "1.2.10")
-        self.assertEqual(info.framework, "net8.0")
-        self.assertEqual(len(info.dependencies), 2)
+    def test_minimum(self):
+        """``4.0.0`` — версия 4.0.0 и новее."""
+        bounds = parse_range("4.0.0")
+        self.assertTrue(in_range("4.0.0", bounds))
+        self.assertTrue(in_range("5.1.0", bounds))
+        self.assertFalse(in_range("3.9.9", bounds))
 
-    def test_package_without_dependencies(self):
-        """Пакет без зависимостей — пустой список."""
-        with mock.patch("depviz.nuget.fetch", fake_server("no_deps.nuspec")):
-            info = get_direct_dependencies(REPOSITORY, "Demo")
-        self.assertEqual(info.dependencies, [])
+    def test_interval(self):
+        """``[8.0.0, 9.0.0)`` — от 8.0.0 включительно до 9.0.0."""
+        bounds = parse_range("[8.0.0, 9.0.0)")
+        self.assertTrue(in_range("8.0.0", bounds))
+        self.assertTrue(in_range("8.5.1", bounds))
+        self.assertFalse(in_range("9.0.0", bounds))
+
+    def test_exact(self):
+        """``[1.0]`` — ровно 1.0 (1.0 и 1.0.0 — одна версия)."""
+        bounds = parse_range("[1.0]")
+        self.assertTrue(in_range("1.0.0", bounds))
+        self.assertFalse(in_range("1.0.1", bounds))
+
+    def test_maximum(self):
+        """``(, 2.0]`` — не выше 2.0."""
+        bounds = parse_range("(, 2.0]")
+        self.assertTrue(in_range("2.0.0", bounds))
+        self.assertFalse(in_range("2.0.1", bounds))
+
+    def test_lowest_matching(self):
+        """Из подходящих берётся самая низкая стабильная (как в NuGet)."""
+        versions = ["3.0.0", "4.0.0-rc1", "4.0.0", "4.1.0", "5.0.0"]
+        self.assertEqual(choose_in_range(versions, "4.0.0"), "4.0.0")
+
+    def test_nothing_matches(self):
+        """Подходящей версии нет — ошибка."""
+        with self.assertRaises(NuGetError):
+            choose_in_range(["1.0.0"], "[2.0.0, 3.0.0)")
+
+
+def nuspec(package, dependencies):
+    """Собрать простой .nuspec с группой net8.0.
+
+    :param package: имя пакета.
+    :param dependencies: список пар ``(имя, диапазон)``.
+    :return: XML в байтах.
+    """
+    items = "".join(
+        f'<dependency id="{name}" version="{version}" />'
+        for name, version in dependencies
+    )
+    return (
+        '<package xmlns="http://schemas.microsoft.com/packaging/2013/05/'
+        f'nuspec.xsd"><metadata><id>{package}</id><dependencies>'
+        f'<group targetFramework="net8.0">{items}</group>'
+        "</dependencies></metadata></package>"
+    ).encode()
+
+
+class FakeRepository:
+    """Подмена сервера NuGet: отвечает заготовленными данными.
+
+    Пакет Top зависит от Middle (диапазон ``2.0.0``), Middle — от Low.
+    Считает запросы, чтобы проверить, что пакеты не скачиваются дважды.
+    """
+
+    def __init__(self):
+        """Заготовить ответы сервера."""
+        self.requests = []
+        self.answers = {
+            "https://example.org/index.json": sample("index.json"),
+            f"{BASE}top/index.json": b'{"versions": ["1.0.0", "1.5.0"]}',
+            f"{BASE}top/1.5.0/top.nuspec":
+                nuspec("Top", [("Middle", "2.0.0"), ("Low", "1.0.0")]),
+            f"{BASE}middle/index.json":
+                b'{"versions": ["1.0.0", "2.0.0", "2.1.0", "3.0.0"]}',
+            f"{BASE}middle/2.0.0/middle.nuspec":
+                nuspec("Middle", [("Low", "1.0.0")]),
+            f"{BASE}low/index.json": b'{"versions": ["1.0.0", "1.1.0"]}',
+            f"{BASE}low/1.0.0/low.nuspec": nuspec("Low", []),
+        }
+
+    def fetch(self, url):
+        """Вернуть ответ или ошибку, как настоящий сервер."""
+        self.requests.append(url)
+        if url not in self.answers:
+            raise NotFoundError(f"не найдено: {url}")
+        return self.answers[url]
+
+
+class NuGetSourceTest(unittest.TestCase):
+    """Проверки источника зависимостей NuGet на подменённом сервере."""
+
+    def make_source(self):
+        """Создать источник и подменить скачивание."""
+        server = FakeRepository()
+        patcher = mock.patch("depviz.nuget.fetch", server.fetch)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return NuGetSource("https://example.org/index.json"), server
+
+    def test_root_latest_dependency_lowest(self):
+        """Корень — последняя версия, зависимость — самая низкая."""
+        source, server = self.make_source()
+        self.assertEqual(source.dependencies("Top"), ["Middle", "Low"])
+        self.assertEqual(source.dependencies("Middle"), ["Low"])
+        self.assertEqual(source.versions["Top"], "1.5.0")
+        self.assertEqual(source.versions["Middle"], "2.0.0")
+        self.assertTrue(server.requests)
+
+    def test_cache(self):
+        """Повторный запрос пакета не идёт на сервер."""
+        source, server = self.make_source()
+        source.dependencies("Top")
+        count = len(server.requests)
+        source.dependencies("Top")
+        self.assertEqual(len(server.requests), count)
 
     def test_unknown_package(self):
         """Пакета нет — понятная ошибка с его именем."""
-        with mock.patch("depviz.nuget.fetch", fake_server("no_deps.nuspec")):
-            with self.assertRaises(NuGetError):
-                get_direct_dependencies(REPOSITORY, "Other")
-
-
-class FormatTest(unittest.TestCase):
-    """Проверки вывода на экран."""
-
-    def test_with_dependencies(self):
-        """Выводятся пакет, группа и каждая зависимость."""
-        info = PackageInfo("Demo", "1.0.0", "net8.0", [("Logging", "8.0.0")])
-        text = format_dependencies(info)
-        self.assertIn("Пакет: Demo 1.0.0", text)
-        self.assertIn("Группа зависимостей: net8.0", text)
-        self.assertIn("  Logging 8.0.0", text)
-
-    def test_without_dependencies(self):
-        """Нет зависимостей — так и написано."""
-        info = PackageInfo("Demo", "1.0.0", "net6.0", [])
-        self.assertIn("Прямых зависимостей нет.", format_dependencies(info))
-
-    def test_no_compatible_group(self):
-        """Нет совместимой группы — об этом сообщается."""
-        info = PackageInfo("Demo", "1.0.0", None, [])
-        self.assertIn("совместимой с net8.0", format_dependencies(info))
+        source, server = self.make_source()
+        with self.assertRaises(NuGetError) as context:
+            source.dependencies("Missing")
+        self.assertIn("Missing", str(context.exception))
+        self.assertTrue(server.requests)
 
 
 if __name__ == "__main__":

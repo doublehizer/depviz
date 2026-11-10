@@ -2,18 +2,17 @@
 
 import argparse
 import sys
+from pathlib import Path
 
 from depviz.config import load_config
-from depviz.errors import ConfigError, NuGetError
-from depviz.nuget import format_dependencies, get_direct_dependencies
+from depviz.errors import ConfigError, NuGetError, RepoFileError
+from depviz.graph import build_graph, format_graph
+from depviz.nuget import NuGetSource
+from depviz.testrepo import load_test_repository
 
 DEFAULT_CONFIG = "config.yaml"
 EXIT_OK = 0
 EXIT_ERROR = 1
-TEST_MODE_MESSAGE = (
-    "Тестовый режим: граф из файла {repository} будет строиться "
-    "на этапе 3."
-)
 
 
 def parse_args(argv=None):
@@ -45,8 +44,22 @@ def print_errors(title, messages):
         print(f"  - {message}", file=sys.stderr)
 
 
+def make_source(config, base_dir):
+    """Выбрать источник зависимостей по режиму работы.
+
+    :param config: проверенные параметры.
+    :param base_dir: папка файла настроек (путь к тестовому
+        репозиторию считается от неё).
+    :return: объект с методом ``dependencies(имя)`` и словарём
+        ``versions``.
+    """
+    if config["test_mode"]:
+        return load_test_repository(base_dir / config["repository"])
+    return NuGetSource(config["repository"])
+
+
 def main(argv=None):
-    """Прочитать настройки и вывести прямые зависимости пакета.
+    """Прочитать настройки, построить граф и вывести его.
 
     :param argv: параметры командной строки.
     :return: код выхода: 0 — успех, 1 — ошибка.
@@ -58,15 +71,12 @@ def main(argv=None):
         print_errors(f"Ошибки в файле настроек {args.config}:",
                      error.messages)
         return EXIT_ERROR
-    if config["test_mode"]:
-        print(TEST_MODE_MESSAGE.format(repository=config["repository"]))
-        return EXIT_OK
     try:
-        info = get_direct_dependencies(
-            config["repository"], config["package"]
-        )
-    except NuGetError as error:
-        print_errors("Ошибка получения зависимостей:", [str(error)])
+        source = make_source(config, Path(args.config).parent)
+        graph = build_graph(config["package"], source.dependencies,
+                            config["max_depth"], config["filter"])
+    except (NuGetError, RepoFileError) as error:
+        print_errors("Ошибка построения графа:", [str(error)])
         return EXIT_ERROR
-    print(format_dependencies(info))
+    print(format_graph(graph, source.versions))
     return EXIT_OK

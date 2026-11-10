@@ -1,0 +1,8 @@
+# Фильтр "c" (без учёта регистра): C и всё под ним исключено.
+package: A
+repository: ../../repos/simple.txt
+test_mode: true
+output_image: graph.png
+ascii_tree: false
+max_depth: 5
+filter: "c"
